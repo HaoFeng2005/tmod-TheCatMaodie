@@ -1,0 +1,3 @@
+displayName = The Cat Maodie
+author = HP
+version = 1.0

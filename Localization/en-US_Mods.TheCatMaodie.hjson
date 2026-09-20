@@ -1,0 +1,65 @@
+Items: {
+	bigdog: {
+		// ← 必须和类名完全一致
+		DisplayName: 大狗
+		Tooltip: 远程武器:消耗弹药发射剑气
+	}
+
+	QiSword: {
+		DisplayName: Qi Sword
+		Tooltip: ""
+	}
+
+	BigDogWhistle: {
+		DisplayName: 大狗哨
+		Tooltip: 召唤一只大狗
+	}
+
+	BigDogWhistle2: {
+		DisplayName: 大狗哨·二阶段
+		Tooltip: 召唤二阶段的大狗(当前是站桩测试版)
+	}
+}
+
+Projectiles: {
+	DecayBeam.DisplayName: Decay Beam
+	BigDogShot.DisplayName: Big Dog Shot
+	BigDogSpit.DisplayName: Big Dog Spit
+	BigDogBlade.DisplayName: Big Dog Blade
+	BigDogOrb.DisplayName: Big Dog Orb
+	BigDogEcho.DisplayName: 音波
+	BigDogRainSword.DisplayName: 落剑
+}
+
+NPCs: {
+	BigDogBoss.DisplayName: 大狗
+	BigDogMinion.DisplayName: 小狗
+	BigDogBoss2.DisplayName: 大狗·二阶段
+	BigDogFlySword.DisplayName: 大飞剑
+}
+
+Buffs: {
+	BigDogCurse: {
+		DisplayName: 大狗的诅咒
+		Description: 攻击力下降10%;若在此状态下再次被音波命中,会招来一只小狗
+	}
+
+	Wildness: {
+		DisplayName: 野性
+		Description: 最大生命-10%,防御-20%;攻击力+10%,移动速度+10%
+	}
+}
+
+// 战斗台词:改词直接改这里,不用动代码。
+// 同一句话有 20~25 秒的冷却(在代码里控制),不会连着重复刷
+Dialogue: {
+	Intro: 哪来的野基米,许久未见这么胆大的家伙了。
+	Dodge1: 很会躲,不是吗?
+	Dodge2: 噢,差点。
+	SpitHitPlain: 犬吠...
+	SpitHitCursed: 它们来了。
+	At30: 汝当是勇士也...
+	At5a: 讨灭耄耋之事可当真...若如此,则吾用以狩猎耄耋之技...
+	At5b: 汝当受之,加以习得即可。
+	BladeFan: 切割...
+}
