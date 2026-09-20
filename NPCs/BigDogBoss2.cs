@@ -162,7 +162,7 @@ namespace TheCatMaodie.NPCs
             NPC.height = 95;
             NPC.damage = 60;
             NPC.defense = 40;
-            NPC.lifeMax = 20000;
+            NPC.lifeMax = 18000;          // 测试值, 想打久一点就调高
             NPC.knockBackResist = 0f;
             NPC.aiStyle = -1;
             NPC.boss = true;
