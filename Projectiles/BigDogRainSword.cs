@@ -22,7 +22,10 @@ namespace TheCatMaodie.Projectiles
         // 之前就是漏了这一步, ai[0] 出生是 0, 第一帧就"预警结束"开始下落, 预警线一次都没画过
         public const float TelegraphFrames = 40f;
         protected virtual float FallSpeed => 17f;         // 下落速度
-        protected virtual float TeleLineLength => 1500f;  // 预警线长度(从悬停点往下, 必出屏)
+        // 预警线长度: 从屏幕上方一路垂下去, 要长到玩家满速下坠 3 秒也看不到端点
+        // (满速约 10 像素/帧 × 180 帧 ≈ 1800, 加上屏幕对角线约 1900 → 给 4000 留足余量)
+        protected virtual float TeleLineLength => 4000f;
+        protected virtual float TeleLineWidth => 3f;      // 细度: 和 boss 放 X 型时的预警线一致(3)
 
         // 贴图朝向: 附魔剑的物品图剑尖斜朝右上(≈ -45°), 要竖直剑尖朝下(+90°)得再转 135°。
         // 预警影和下落都用这个朝向, 看上去就是"竖直往下插"
@@ -30,8 +33,10 @@ namespace TheCatMaodie.Projectiles
 
         public override void SetStaticDefaults()
         {
-            // 出生点在屏幕上方之外, 预警线一路伸出屏幕: 放宽剔除
-            ProjectileID.Sets.DrawScreenCheckFluff[Type] = 1800;
+            // 出生点在屏幕上方之外, 预警线一路垂到屏幕下方之外: 放宽剔除范围。
+            // 这个值必须比"出生点离屏距离 + 预警线长度"大, 否则玩家往下飞的时候
+            // 整个投射物会被判定为"离屏"而不再绘制 —— 预警线会凭空消失。
+            ProjectileID.Sets.DrawScreenCheckFluff[Type] = 4600;
         }
 
         public override void SetDefaults()
@@ -89,24 +94,27 @@ namespace TheCatMaodie.Projectiles
             Texture2D tex = ModContent.Request<Texture2D>(Texture).Value;
             Vector2 screenPos = Projectile.Center - Main.screenPosition;
 
-            // 预警阶段: 竖直预警线"长闪" —— 慢速明暗交替(亮得久、看得清), 半透明剑影提示落点
+            // 预警阶段: 竖直预警线"长闪一下"就不再变 —— 亮起后保持不动, 落剑前几帧淡出。
+            // (参照阿忒弥斯的激光预警线: 它是稳定的, 只在最后几帧淡掉, 不是反复闪)
             if (Projectile.ai[1] == 0f)
             {
-                float sinceStart = TelegraphFrames - Projectile.ai[0];
-                float fadein = MathHelper.Clamp(sinceStart / 6f, 0f, 1f);
-                // 长闪: 36 帧一个周期, 前 24 帧亮 / 后 12 帧暗, 明暗对比拉大
-                float cycle = sinceStart % 36f;
-                float blink = cycle < 24f ? 0.85f : 0.15f;
-                Color c = new Color(225, 215, 255) * (0.9f * blink * fadein);
+                float sinceStart = TelegraphFrames - Projectile.ai[0];     // 已过去多少帧
+                float remain = Projectile.ai[0];                           // 还剩多少帧
+                float fadein = MathHelper.Clamp(sinceStart / 6f, 0f, 1f);  // 亮起
+                float fadeout = MathHelper.Clamp(remain / 8f, 0f, 1f);     // 落下前淡出
+                Color c = new Color(225, 215, 255) * (0.85f * fadein * fadeout);
 
+                // 注意轴心: 不旋转, 直接把 1x1 白点纵向拉长, 轴心取"上端中点"(0.5, 0) ——
+                // 这样线是"从剑的位置单向下垂", 横跨整屏; 若用 (0.5, 0.5) 会以上下各半的方式
+                // 以剑为中心展开, 剑在屏幕外, 往下就只剩一半长度(之前"长度不够"就是这个原因)
                 Main.spriteBatch.Draw(
                     TextureAssets.MagicPixel.Value,
-                    screenPos,
+                    screenPos,                                 // 从剑的位置起笔
                     new Rectangle(0, 0, 1, 1),
                     c,
-                    MathHelper.PiOver2,                   // 竖直(线段默认水平, 转90度)
-                    new Vector2(0.5f, 0.5f),
-                    new Vector2(TeleLineLength, 4f),
+                    0f,                                        // 竖直靠缩放实现, 不需要旋转
+                    new Vector2(0.5f, 0f),                     // 轴心: 上端中点 → 单向下垂
+                    new Vector2(TeleLineWidth, TeleLineLength),
                     SpriteEffects.None,
                     0f);
 
