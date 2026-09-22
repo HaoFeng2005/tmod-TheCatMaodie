@@ -18,8 +18,9 @@ namespace TheCatMaodie.NPCs
 
         // ── 可调参数 ──
         protected virtual float RainInterval => 170f;   // 每隔多少帧降一轮剑雨
-        protected virtual int SwordsPerRain => 4;       // 每轮几把(实际 = 3~这个值随机)
-        protected virtual float RainSpread => 240f;     // 剑落点在玩家水平方向的散布半径
+        protected virtual int SwordsPerRainMin => 10;   // 每轮最少几把
+        protected virtual int SwordsPerRainMax => 14;   // 每轮最多几把
+        protected virtual float RainSpread => 700f;     // 剑落点的散布半径(480 还是太挤在玩家周围, 摊到接近屏幕边缘)
         protected virtual float LeaveFrames => 4200f;   // 兜底寿命(70秒, 正常由 boss 撤走)
 
         public override void SetStaticDefaults()
@@ -90,21 +91,32 @@ namespace TheCatMaodie.NPCs
             }
         }
 
-        // 一轮剑雨: 在玩家附近挑几个 x 位置(其中一个尽量正对玩家), 生成预警+落剑
+        // 一轮剑雨: 覆盖玩家左右一大片。剑数多(10+)时纯随机会扎堆, 所以把散布区间
+        // 等分成 count 条"带", 每条带里随机取一点 —— 既保证覆盖均匀, 又不显得机械
         private void DropRain(Player player)
         {
             if (Main.netMode == NetmodeID.MultiplayerClient) return;   // 生成只在服务器/单机
 
-            int count = Main.rand.Next(3, SwordsPerRain + 1);
+            int count = Main.rand.Next(SwordsPerRainMin, SwordsPerRainMax + 1);
+            float viewH = Main.ViewSize.Y;
+            if (float.IsNaN(viewH) || viewH < 300f || viewH > 20000f) viewH = 900f;
+
             for (int i = 0; i < count; i++)
             {
-                // 第 0 把尽量正对玩家, 其余散布; 有一把稍偏远, 逼玩家不能只盯脚下
-                float x = (i == 0)
-                    ? player.Center.X + Main.rand.NextFloat(-30f, 30f)
-                    : player.Center.X + Main.rand.NextFloat(-RainSpread, RainSpread);
+                float x;
+                if (i == 0)
+                {
+                    // 第 0 把正对玩家: 保证脚下一定有剑, 不能只靠运气
+                    x = player.Center.X + Main.rand.NextFloat(-30f, 30f);
+                }
+                else
+                {
+                    // 其余按等分带分布: 每条带宽 = 2×散布 / (count-1), 在带内随机
+                    float band = 2f * RainSpread / Math.Max(1, count - 1);
+                    float bandCenter = -RainSpread + band * (i - 0.5f);
+                    x = player.Center.X + bandCenter + Main.rand.NextFloat(-band * 0.42f, band * 0.42f);
+                }
 
-                float viewH = Main.ViewSize.Y;
-                if (float.IsNaN(viewH) || viewH < 300f || viewH > 20000f) viewH = 900f;
                 Vector2 spawn = new Vector2(x, player.Center.Y - viewH * 0.62f);   // 屏幕上方之外
 
                 // ★ 必须把预警帧数塞进 ai[0]: 弹幕的预警倒计时用的就是它,
