@@ -6,6 +6,9 @@ A Terraria mod prototype called TheCatMaodie, built with C#.
 - 大狗 Boss（一阶段），大狗boss（二阶段）
 - 相关物品、弹幕、音效
 
+## 更新日志
+[查看 Changelog](Changelog.md)
+
 ## 构建
 用 tModLoader 打开 ModSources 里的 TheCatMaodie 文件夹，编译即可。
 
