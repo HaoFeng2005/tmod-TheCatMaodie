@@ -21,6 +21,8 @@ namespace TheCatMaodie.NPCs
         protected virtual int SwordsPerRainMin => 10;   // 每轮最少几把
         protected virtual int SwordsPerRainMax => 14;   // 每轮最多几把
         protected virtual float RainSpread => 700f;     // 剑落点的散布半径(480 还是太挤在玩家周围, 摊到接近屏幕边缘)
+        // 落剑的生成高度: 要"玩家向上飞 2 秒内看不到生成点"(见 DropRain 里的注释)
+        protected virtual float SwordSpawnHeight => 2400f;
         protected virtual float LeaveFrames => 4200f;   // 兜底寿命(70秒, 正常由 boss 撤走)
 
         public override void SetStaticDefaults()
@@ -98,8 +100,6 @@ namespace TheCatMaodie.NPCs
             if (Main.netMode == NetmodeID.MultiplayerClient) return;   // 生成只在服务器/单机
 
             int count = Main.rand.Next(SwordsPerRainMin, SwordsPerRainMax + 1);
-            float viewH = Main.ViewSize.Y;
-            if (float.IsNaN(viewH) || viewH < 300f || viewH > 20000f) viewH = 900f;
 
             for (int i = 0; i < count; i++)
             {
@@ -117,7 +117,16 @@ namespace TheCatMaodie.NPCs
                     x = player.Center.X + bandCenter + Main.rand.NextFloat(-band * 0.42f, band * 0.42f);
                 }
 
-                Vector2 spawn = new Vector2(x, player.Center.Y - viewH * 0.62f);   // 屏幕上方之外
+                // 生成点要够高: 玩家向上飞 2 秒也看不到它, 才有"从屏幕外落进来"的感觉。
+                // 依据: 满速上飞约 10 像素/帧 × 120 帧 = 1200 像素, 再加屏幕半个高度(约 465)
+                // → 至少要在玩家上方 1700 像素; 给 2400 留足余量
+                // ★ 但必须夹在世界边界之内! Projectile.Update 开头有一条"出界即销毁":
+                //     position.X/Y 越过 Main.leftWorld/rightWorld/topWorld/bottomWorld 就直接 active=false,
+                //     不看 tileCollide。玩家飞得高(离世界上边界不足 2400)或贴着世界左右边缘时,
+                //     不夹的话弹幕刚生成就被引擎销毁 —— 表现就是"落剑有时候完全不触发"
+                float spawnX = MathHelper.Clamp(x, Main.leftWorld + 40f, Main.rightWorld - 40f);
+                float spawnY = Math.Max(player.Center.Y - SwordSpawnHeight, Main.topWorld + 40f);
+                Vector2 spawn = new Vector2(spawnX, spawnY);
 
                 // ★ 必须把预警帧数塞进 ai[0]: 弹幕的预警倒计时用的就是它,
                 //    漏传的话 ai[0] 出生是 0, 第一帧就开始下落, 预警线永远不会出现(踩过的坑)

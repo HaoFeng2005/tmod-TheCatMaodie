@@ -15,20 +15,20 @@ namespace TheCatMaodie.NPCs
     // 一组出手共三拍(血越少越快):
     //   第1拍  走位到玩家左下/右下 → 上方生成虚影 → 双发射大弹幕(X 型交叉) → 爆开成 12 发小弹幕
     //   第2拍  同上, 换一边
-    //   第3拍  boss 和虚影飞到玩家同一水平线合并 → 蓄力 → 朝玩家高速冲撞(锁定方向, 可躲)
+    //   第3拍  boss 自己贴边滑到玩家一侧 → 后撤拉开距离 → 蓄力 → 朝玩家高速冲撞(锁定方向, 可躲)
     //
     // 大弹幕: 直线飞行, 越过"发射时锁定的玩家位置+260px"后原地爆开(爆点发射时定死, 走位能甩开)。
     // 虚影: 不是真的第二个NPC, 只是 PreDraw 里多画的一层半透明本体, 位置由 AI 计算 ——
     //       所以它没有判定、打不着、不消耗NPC槽位, 行为天然和 boss 完全同步
     //
     // 状态机(NPC.ai[0]):
-    //   0 = 悬停观察   1 = 合并冲撞的蓄力   2 = 冲撞(有伤害)   3 = 收招
+    //   0 = 悬停观察   1 = 冲撞的蓄力   2 = 冲撞(有伤害)   3 = 收招
     //   5 = X 型双发(走位 + 虚影 + 预警线 + 发射, 一气呵成)
     //
     // 便签分工:
     //   ai[0]=状态   ai[1]=状态内计时器   ai[2]=出手冷却   ai[3]=冲撞角度(冲出去那帧定死)
     //   localAI[0]=悬停点X偏移  localAI[1]=悬停点Y偏移  localAI[2]=重选悬停点倒计时
-    //   localAI[3]=本组已完成的攻击拍数(0/1=下一拍X型, 2=下一拍合并冲撞; 冲撞收招后清零)
+    //   localAI[3]=本组已完成的攻击拍数(0/1=下一拍X型, 2=下一拍冲刺; 冲撞收招后清零)
     //   虚影位置不能用 localAI 了 —— localAI 只有 4 个槽(0~3), 之前写 localAI[4/5] 运行期直接越界
     //   (日志里的 IndexOutOfRangeException 就是它)。改用实例字段 ghostPos 等, 联机同步走 SendExtraAI
     //
@@ -78,10 +78,21 @@ namespace TheCatMaodie.NPCs
         protected virtual float AimLineLength => 4000f;
         // 本体射完之后, 虚影隔多少帧再射(不同时: 先本体后虚影, 两条弹道交错着来)
         protected virtual float GhostShotDelay => 14f;
+        // ── 第二拍的"横移途中放飞刃" ──
+        // 第二拍本体要沿屏幕下缘从一侧横移到另一侧(会从玩家正下方经过), 这一段要更快
+        protected virtual float TransitSpeedMult => 1.9f;
+        protected virtual int BladeVolleyCount => 4;          // 一次放几把飞刃
+        protected virtual float BladeVolleySpreadDeg => 24f;  // 飞刃的扇形张角
+        protected virtual float BladeSpinFrames => 26f;       // 每把飞刃"原地缓缓自转"的帧数
+        protected virtual float BladeSpinStagger => 5f;       // 每把之间错开的旋转帧数(依次甩出)
+        protected virtual float BladeSpawnSpacing => 52f;     // 出生时相邻两把的横向间距(太挤会糊成一把)
+        protected virtual int BladeVolleyDamage => 14;
+        // 横移途中"经过玩家正上/下方"的判定范围: 水平距离小于它就放飞刃
+        protected virtual float BladeTriggerRange => 80f;
 
-        // ── 合并冲撞(状态1/2/3) ──
-        protected virtual float WindupFrames => 26f;          // 合并后的蓄力(比之前 38 快)
-        // 起跑距离: 合并完成后先退到这里之外才起跑冲刺。屏幕边缘离玩家只有约半个屏宽(≈730px),
+        // ── 冲刺(状态1/2/3) ──
+        protected virtual float WindupFrames => 26f;          // 冲刺前的蓄力(比最初 38 快)
+        // 起跑距离: 贴边滑行后先退到这里之外才起跑冲刺。屏幕边缘离玩家只有约半个屏宽(≈730px),
         // 直接冲起步就贴脸; 拉到这个距离外, 玩家才有走位反应窗口
         protected virtual float DashStartDist => 520f;
         protected virtual float DashSpeed => 24f;             // 冲撞速度(之前 21)
@@ -92,14 +103,14 @@ namespace TheCatMaodie.NPCs
         protected virtual float TripleChargeFrames => 32f;    // 每段蓄力(预警线时长)
         protected virtual float TripleDashLength => 48f;      // 每段冲刺持续帧数(48×27 ≈ 1300px)
         protected virtual float TriplePauseFrames => 18f;     // 段间急停喘息(间隔不变)
-        protected virtual float TripleDashSpeed => 27f;       // 每段冲刺速度(比合并冲刺 24 还快一点)
+        protected virtual float TripleDashSpeed => 27f;       // 每段冲刺速度(比收尾冲刺的 24 还快一点)
 
         // ── 剑模式(状态8): 三段冲刺结束后有概率进入 ──
         // 召唤大飞剑(自己把"剑"丢了, 切到没叼剑的站立贴图) → 成对发射音波(5~6 对,
         // 每对在玩家身上交叉出 X 光束) → 结束: 撤走飞剑, 换回叼刀贴图
         // 三个收尾大招的基准权重(动态平衡的起点, 见 PickEnder):
         // 想更常看到哪一招就把它调高
-        protected virtual float EnderWeightMerge => 1f;       // 合并冲刺
+        protected virtual float EnderWeightMerge => 1f;       // 冲刺
         protected virtual float EnderWeightTriple => 1f;      // 三段冲刺
         protected virtual float EnderWeightSword => 1.6f;     // 剑模式(基准给高, 让它更常出现)
         protected virtual float SwordPairGap => 45f;          // 两对音波之间的间隔
@@ -159,11 +170,12 @@ namespace TheCatMaodie.NPCs
         // (引擎给每个 NPC 单独建一个 ModNPC 实例, 所以字段天然按NPC隔离)
         private Vector2 ghostPos;     // 虚影的世界坐标(每帧由 AI 维护)
         private Vector2 ghostVel;     // 虚影的速度(虚影不是NPC, 位置靠这套速度自己积分)
-        private bool ghostFlying;     // 虚影是否处于"飞行中"(走位/合并滑行), 影响绘制的透明度
+        private bool ghostAlive;      // 虚影是否"存在"(第一拍到位时生成, 两发大弹幕打完消失)
+        private bool ghostFlying;     // 虚影是否处于"飞行中"(走位/滑行), 影响绘制的透明度
         private float cornerX;        // 本体当前占据的屏角: -1=左列 +1=右列
         private float cornerY;        // 本体当前占据的屏角: -1=上半 +1=下半(本体永远在下半)
-        private float mergeSide;      // 合并阶段本体贴哪一侧的屏幕边缘: -1=左 +1=右
-        // 三个收尾大招各自放过多少次(0=合并冲刺 1=三段冲刺 2=剑模式)。
+        private float dashSide;       // 冲刺阶段本体贴哪一侧的屏幕边缘: -1=左 +1=右
+        // 三个收尾大招各自放过多少次(0=冲刺 1=三段冲刺 2=剑模式)。
         // 动态平衡用: 权重 = 基准 ÷ (1+次数), 放过的招权重下降, 没放的相对更高
         private int[] enderCounts = new int[3];
 
@@ -172,6 +184,8 @@ namespace TheCatMaodie.NPCs
         private int xPhase;
         private float xCharge;        // 本体到位后的蓄力帧数
         private float xShotDelay;     // 距本体发射过了多少帧
+        private bool xBladesFired;    // 本拍横移途中的飞刃是否已经放过(一次一拍)
+        private bool xGhostBladesFired; // 虚影自己那一轮(各自按自己的位置触发)
 
         public override void SetStaticDefaults()
         {
@@ -196,7 +210,9 @@ namespace TheCatMaodie.NPCs
             NPC.DeathSound = SoundID.NPCDeath1;
         }
 
+        // 音效(和一期共用同样的文件): 冲刺用 Dash, 横移途中放飞刃用 Blade
         private static readonly SoundStyle SfxDash = new SoundStyle("TheCatMaodie/Sounds/Dash") { Volume = 0.8f };
+        private static readonly SoundStyle SfxBlade = new SoundStyle("TheCatMaodie/Sounds/Blade") { Volume = 0.8f };
 
         public override void SendExtraAI(System.IO.BinaryWriter writer)
         {
@@ -204,15 +220,18 @@ namespace TheCatMaodie.NPCs
             for (int i = 0; i < 4; i++) writer.Write(NPC.localAI[i]);
             writer.Write(ghostPos.X);
             writer.Write(ghostPos.Y);
+            writer.Write(ghostAlive);
             writer.Write(ghostFlying);
+            writer.Write(dashSide);
             writer.Write(cornerX);
             writer.Write(cornerY);
-            writer.Write(mergeSide);
             writer.Write(tripleDashAngle);
             for (int i = 0; i < 3; i++) writer.Write(enderCounts[i]);
             writer.Write(xPhase);
             writer.Write(xCharge);
             writer.Write(xShotDelay);
+            writer.Write(xBladesFired);
+            writer.Write(xGhostBladesFired);
             writer.Write(formBlade);
             writer.Write(faceRight);
             writer.Write(facingReady);
@@ -224,15 +243,18 @@ namespace TheCatMaodie.NPCs
             for (int i = 0; i < 4; i++) NPC.localAI[i] = reader.ReadSingle();
             ghostPos.X = reader.ReadSingle();
             ghostPos.Y = reader.ReadSingle();
+            ghostAlive = reader.ReadBoolean();
             ghostFlying = reader.ReadBoolean();
+            dashSide = reader.ReadSingle();
             cornerX = reader.ReadSingle();
             cornerY = reader.ReadSingle();
-            mergeSide = reader.ReadSingle();
             tripleDashAngle = reader.ReadSingle();
             for (int i = 0; i < 3; i++) enderCounts[i] = reader.ReadInt32();
             xPhase = reader.ReadInt32();
             xCharge = reader.ReadSingle();
             xShotDelay = reader.ReadSingle();
+            xBladesFired = reader.ReadBoolean();
+            xGhostBladesFired = reader.ReadBoolean();
             formBlade = reader.ReadBoolean();
             faceRight = reader.ReadBoolean();
             facingReady = reader.ReadBoolean();
@@ -265,10 +287,10 @@ namespace TheCatMaodie.NPCs
             switch ((int)NPC.ai[0])
             {
                 case 0: HoverObserve(player, aggression); break;
-                case 1: MergeWindup(player); break;
+                case 1: DashWindup(player); break;
                 case 2: Dash(); break;
                 case 5: case 6: XPattern(player); break;   // 5/6 都是 X 型, 选边由拍数决定
-                case 7: TripleDash(player); break;         // 三段冲刺(与合并冲刺交替)
+                case 7: TripleDash(player); break;         // 三段冲刺
                 case 8: SwordMode(player); break;          // 剑模式: 大飞剑 + 音波X激光
                 default: Recover(); break;
             }
@@ -277,7 +299,7 @@ namespace TheCatMaodie.NPCs
         // ── 状态0: 悬停观察 ──
         // 悬停点分两种: X 型刚打完的那一拍(localAI[3] 是 1 或 2), 拉到屏幕外围候场 ——
         // 下一拍 X 型从屏角就近起手, 弹幕永远不会从玩家脸上发射;
-        // 合并冲刺打完(本组结束, localAI[3] 清零)才回到玩家两侧的正常悬停, 接近感来自这里
+        // 冲刺打完(本组结束, localAI[3] 清零)才回到玩家两侧的正常悬停, 接近感来自这里
         private void HoverObserve(Player player, float aggression)
         {
             NPC.damage = 0;
@@ -358,6 +380,8 @@ namespace TheCatMaodie.NPCs
             xPhase = 0;
             xCharge = 0f;
             xShotDelay = 0f;
+            xBladesFired = false;
+            xGhostBladesFired = false;
             ghostFlying = false;
         }
 
@@ -374,12 +398,12 @@ namespace TheCatMaodie.NPCs
             float roll = Main.rand.NextFloat() * (w0 + w1 + w2);
             int pick = (roll < w0) ? 0 : (roll < w0 + w1) ? 1 : 2;
             enderCounts[pick]++;
-            ResetXBeat();     // 同样要当帧清: 合并冲刺(状态1)的绘制也看 ghostFlying, 不清会闪一下虚影
+            ResetXBeat();     // 同样要当帧清: 冲刺阶段(状态1)的绘制也看虚影状态, 不清会闪一下虚影
 
             switch (pick)
             {
                 case 0:
-                    NPC.ai[0] = 1f;                          // 合并冲刺
+                    NPC.ai[0] = 1f;                          // 冲刺
                     break;
                 case 1:
                     NPC.ai[0] = 7f;                          // 三段冲刺
@@ -423,23 +447,50 @@ namespace TheCatMaodie.NPCs
             Vector2 selfCorner = ScreenCornerWorld(player, cornerX, cornerY);
             Vector2 ghostCorner = ScreenCornerWorld(player, cornerX, -cornerY);
 
+            // 第二拍是"沿屏幕边横移到另一角"的过程(会从玩家正下方经过), 移动更快, 中段放飞刃
+            bool transit = NPC.localAI[3] >= 1f;
+
             switch (xPhase)
             {
-                // ── 分段0: 本体自己飞向屏角 ──
-                // ★ 虚影必须等本体真正到位才生成。之前是"第51帧无条件生成", 于是本体换边
-                //   还在半路时, 虚影就从靠近玩家的中途位置冒出来 —— 它再快也已经站在坏起点上了,
-                //   结果就是"虚影贴着玩家放大弹幕"。现在从源头保证它的起点永远在屏幕角落
+                // ── 分段0: 本体飞向屏角(第二拍是快速横移) ──
                 case 0:
-                    FlyToward(selfCorner);
+                    FlyToward(selfCorner, speedMult: transit ? TransitSpeedMult : 1f);
                     FaceTowards(player.Center, TurnRate);
+
+                    // 横移中段: 经过玩家正上/下方(水平距离很近)的那一刻, 朝玩家放一轮飞刃
+                    if (transit && !xBladesFired &&
+                        (Math.Abs(NPC.Center.X - player.Center.X) <= BladeTriggerRange || NPC.ai[1] >= 90f))
+                    {
+                        xBladesFired = true;
+                        FireBladeVolley(player, NPC.Center);
+                        NPC.netUpdate = true;
+                    }
+
+                    // 虚影自己也判断一次: 它在上缘横移, 位置和本体不同, 所以"经过玩家正上/下方"
+                    // 的时刻也不同 —— 各自按自己的位置触发, 而不是跟着本体一起放
+                    if (transit && ghostAlive && !xGhostBladesFired &&
+                        (Math.Abs(ghostPos.X - player.Center.X) <= BladeTriggerRange || NPC.ai[1] >= 110f))
+                    {
+                        xGhostBladesFired = true;
+                        FireBladeVolley(player, ghostPos);
+                        NPC.netUpdate = true;
+                    }
+
                     if (Vector2.Distance(NPC.Center, selfCorner) <= ArriveRadius ||
                         NPC.ai[1] >= ApproachTimeoutMax)          // 兜底: 玩家一直跑也总得往下走
                     {
                         xPhase = 1;
-                        ghostPos = NPC.Center;    // 从"已经站好的角落"分出
-                        ghostVel = Vector2.Zero;  // 从静止开始加速
-                        ghostFlying = true;
                         xCharge = 0f;
+
+                        // ★ 虚影只在"本体到达角落、即将放大弹幕"这一刻生成(第一拍)。
+                        //   第二拍它已经存在, 会跟着沿上缘对称横移过来
+                        if (!ghostAlive)
+                        {
+                            ghostPos = NPC.Center;    // 从"已经站好的角落"分出
+                            ghostVel = Vector2.Zero;  // 从静止开始加速
+                            ghostAlive = true;
+                            ghostFlying = true;
+                        }
                         NPC.netUpdate = true;
                     }
                     return;
@@ -447,7 +498,7 @@ namespace TheCatMaodie.NPCs
                 // ── 分段1: 虚影飞向对角 + 本体贴角蓄力 ──
                 case 1:
                     FlyToward(selfCorner, tight: true);
-                    MoveGhostToward(ghostCorner, tight: false);
+                    if (ghostAlive) MoveGhostToward(ghostCorner, tight: false);
                     FaceTowards(player.Center, TurnRate);
                     xCharge++;
                     if (NPC.ai[1] % 4f == 0f)
@@ -467,21 +518,37 @@ namespace TheCatMaodie.NPCs
                 // 三重条件: 本体已发射 + 虚影自己已到位 + 距本体发射够久。缺一不发 —— 绝不抢在飞行途中开火
                 default:
                     FlyToward(selfCorner, tight: true);
-                    bool ghostReady = Vector2.Distance(ghostPos, ghostCorner) <= ArriveRadius;
-                    MoveGhostToward(ghostCorner, tight: ghostReady);
+                    bool ghostReady = !ghostAlive || Vector2.Distance(ghostPos, ghostCorner) <= ArriveRadius;
+                    if (ghostAlive) MoveGhostToward(ghostCorner, tight: ghostReady);
                     FaceTowards(player.Center, TurnRate);
                     xShotDelay++;
 
                     if ((ghostReady && xShotDelay >= GhostShotDelay) || xShotDelay >= GhostWaitMax)
                     {
-                        // 虚影后射: 从它现在的位置朝玩家打(此时它一定在它的角上, 除非兜底超时)
-                        Vector2 gDir = player.Center - ghostPos;
-                        if (gDir.LengthSquared() < 1f) gDir = new Vector2(NPC.direction, 0f);
-                        gDir = Vector2.Normalize(gDir);
-                        FireOrb(ghostPos + gDir * (NPC.width * 0.5f + 25f), player);
+                        if (ghostAlive)
+                        {
+                            // 虚影后射: 从它现在的位置朝玩家打
+                            Vector2 gDir = player.Center - ghostPos;
+                            if (gDir.LengthSquared() < 1f) gDir = new Vector2(NPC.direction, 0f);
+                            gDir = Vector2.Normalize(gDir);
+                            FireOrb(ghostPos + gDir * (NPC.width * 0.5f + 25f), player);
+                        }
 
                         ghostFlying = false;
                         NPC.localAI[3]++;               // 完成一拍
+
+                        // ★ 两发大弹幕都放完了 → 虚影就此消失(不再合并, 冲刺由本体自己完成)
+                        if (NPC.localAI[3] >= 2f)
+                        {
+                            for (int i = 0; i < 14; i++)
+                            {
+                                Dust d = Dust.NewDustDirect(NPC.position, NPC.width, NPC.height, DustID.Silver);
+                                d.noGravity = true;
+                                d.velocity = Main.rand.NextVector2Circular(4f, 4f);
+                            }
+                            ghostAlive = false;
+                        }
+
                         NPC.ai[0] = 0f;
                         NPC.ai[1] = 0f;
                         NPC.ai[2] = 25f;                // 拍间小间隔(和 XBeatInterval 一起构成两次X之间的空档)
@@ -489,6 +556,42 @@ namespace TheCatMaodie.NPCs
                     }
                     return;
             }
+        }
+
+        // 朝玩家掷出几把飞刃(复用一期的 BigDogBlade, 但走它的"悬停旋刃"模式)。
+        // 横移中段本体和虚影各放一轮
+        private void FireBladeVolley(Player player, Vector2 origin)
+        {
+            if (Main.netMode == NetmodeID.MultiplayerClient) return;
+
+            Vector2 toPlayer = player.Center - origin;
+            if (toPlayer.LengthSquared() < 1f) toPlayer = new Vector2(NPC.direction, 0f);
+            Vector2 dirNorm = Vector2.Normalize(toPlayer);
+            Vector2 perp = dirNorm.RotatedBy(MathHelper.PiOver2);
+            float aim = toPlayer.ToRotation();
+            float half = MathHelper.ToRadians(BladeVolleySpreadDeg) * 0.5f;
+            Vector2 spawn = origin + dirNorm * (NPC.width * 0.5f + 20f);
+
+            for (int i = 0; i < BladeVolleyCount; i++)
+            {
+                float f = (BladeVolleyCount <= 1) ? 0f : (i / (float)(BladeVolleyCount - 1) * 2f - 1f);
+                float ang = aim + f * half;
+
+                // ★ 出生点必须各自错开: 旋转阶段速度是零(钉在原地), 如果 4 把共用同一个出生点,
+                //   它们会完全重叠成一把, 直到起飞才散开。所以出生时就按扇形铺好:
+                //   横向按档错开 + 外侧略微靠后 → 摆成一道弧形, 一眼就能看出是 4 把
+                float lateral = (i - (BladeVolleyCount - 1) * 0.5f) * BladeSpawnSpacing;
+                Vector2 bladeSpawn = spawn + perp * lateral - dirNorm * (Math.Abs(lateral) * 0.22f);
+
+                // 模式1(悬停旋刃): ai[0]=1 开模式, ai[1]=原地旋转帧数(逐把错开, 看起来是依次甩出),
+                // ai[2]=起飞方向(保住"扇形散开"的起手)
+                Projectile.NewProjectile(NPC.GetSource_FromAI(), bladeSpawn, Vector2.Zero,
+                    ModContent.ProjectileType<Projectiles.BigDogBlade>(),
+                    BladeVolleyDamage, 1f, Main.myPlayer,
+                    1f, BladeSpinFrames + i * BladeSpinStagger, ang);
+            }
+
+            SoundEngine.PlaySound(SfxBlade, origin);
         }
 
         // (贴角也走速度: 见 FlyToward 的 tight 参数 —— 没有任何直接改写位置的代码)
@@ -521,7 +624,7 @@ namespace TheCatMaodie.NPCs
             }
         }
 
-        // 屏幕左/右缘的世界坐标(合并阶段用)。
+        // 屏幕左/右缘的世界坐标(冲刺贴边时用)。
         // side ∈ {-1,+1} 决定左/右缘; progress ∈ [0,1] 是从上缘滑到玩家高度的进度
         private static Vector2 ScreenEdgeWorld(Player player, float side, float progress)
         {
@@ -555,63 +658,43 @@ namespace TheCatMaodie.NPCs
             return ghostPos;
         }
 
-        // ── 状态1: 合并冲撞 ──
-        // 全程仍贴在屏幕边缘: 本体沿屏幕边缘水平滑到玩家正左/正右侧(与玩家同一水平线),
-        // 虚影同时沿边缘从对角滑到另一侧 → 两端合拢(虚影被吸进本体) → 后撤拉开起跑距离
-        // → 蓄力 → 锁定方向冲撞。
-        // 后撤这一段不能省: 合并点在屏幕边缘, 离玩家已经只剩半个屏宽, 直接冲的话起步就贴脸,
-        // 玩家根本来不及反应。拉到 DashStartDist 之外再起跑, 冲刺才有"从远处扑过来"的读法
-        private void MergeWindup(Player player)
+        // ── 状态1: 冲刺蓄力(本体自己冲, 已经不再和虚影合并) ──
+        // 虚影在两发大弹幕打完时就消失了, 所以这里只有本体:
+        //   沿屏幕边缘滑到玩家正左/正右侧 → 后撤拉开起跑距离 → 蓄力 → 锁定方向冲撞。
+        // 后撤这一段不能省: 屏边离玩家只剩半个屏宽, 直接冲起步就贴脸, 玩家来不及反应。
+        // 拉到 DashStartDist 之外再起跑, 冲刺才有"从远处扑过来"的读法
+        private void DashWindup(Player player)
         {
             NPC.damage = 0;
             NPC.ai[1]++;
 
-            // 起手决定合并侧: 沿用当前所在的左右(在左边就贴左缘, 虚影走右缘)
+            // 起手决定贴哪一侧的屏边: 在右边就从左边冲过来, 反之亦然
             if (NPC.ai[1] == 1f)
             {
-                mergeSide = (cornerX >= 0f) ? -1f : 1f;   // 在右下角 → 从左侧合并; 在左下角 → 从右侧
-                // 虚影也从本体当前位置分出(和 X 型一致): 不指定起点的话它会从上一拍遗留的
-                // 位置开始滑, 看起来像"凭空从别处飘过来"
-                ghostPos = NPC.Center;
-                ghostVel = Vector2.Zero;
-                ghostFlying = true;
+                dashSide = (cornerX >= 0f) ? -1f : 1f;
                 NPC.netUpdate = true;
             }
 
-            float mergeFrames = 55f;                      // 贴边滑行的时长
-            float pullbackFrames = 30f;                   // 合并后向后拉开的时长
+            float slideFrames = 45f;                      // 贴边滑行的时长
+            float pullbackFrames = 30f;                   // 后撤拉开起跑距离的时长
 
-            if (NPC.ai[1] <= mergeFrames)
+            if (NPC.ai[1] <= slideFrames)
             {
-                // 本体: 沿屏幕边缘滑到玩家高度; 虚影: 对称滑到另一缘。
-                // 位置全部由速度积分产生(没有直接改写 Center 的代码), 观感是"滑过去"而不是"被挪过去"
-                float slide = NPC.ai[1] / mergeFrames;    // 0 → 1
-                Vector2 selfTarget = ScreenEdgeWorld(player, mergeSide, slide);
-                Vector2 ghostTarget = ScreenEdgeWorld(player, -mergeSide, slide);
-
-                FlyToward(selfTarget);
-                MoveGhostToward(ghostTarget, tight: false);
+                // 沿屏幕边缘滑到玩家所在的高度(位置全由速度积分产生)
+                float slide = NPC.ai[1] / slideFrames;
+                FlyToward(ScreenEdgeWorld(player, dashSide, slide), speedMult: 1.4f);
                 FaceTowards(player.Center, TurnRate);
-
-                if (NPC.ai[1] == mergeFrames)
-                {
-                    // 合并: 虚影吸进本体(接下来不再绘制)
-                    ghostFlying = false;
-                    NPC.netUpdate = true;
-                }
                 return;
             }
 
-            // 合并完成 → 后撤拉开起跑距离: 朝玩家反方向(略偏上)退到 DashStartDist 之外。
-            // 同样是速度行为(期望速度指向"远离子弹道"的退位点), 不是瞬移
-            float sinceMerged = NPC.ai[1] - mergeFrames;
-            if (sinceMerged <= pullbackFrames)
+            float sinceSlid = NPC.ai[1] - slideFrames;
+            if (sinceSlid <= pullbackFrames)
             {
+                // 后撤拉开起跑距离: 朝远离玩家的方向退到 DashStartDist 之外
                 Vector2 away = NPC.Center - player.Center;
-                if (away.LengthSquared() < 1f) away = new Vector2(mergeSide, 0f);
+                if (away.LengthSquared() < 1f) away = new Vector2(dashSide, 0f);
                 away = Vector2.Normalize(away);
 
-                // 退到起跑距离之外就停(期望速度归零), 否则继续退
                 float distNow = Vector2.Distance(NPC.Center, player.Center);
                 Vector2 desired = (distNow < DashStartDist)
                     ? away * MoveSpeed * 1.6f
@@ -624,14 +707,16 @@ namespace TheCatMaodie.NPCs
                 return;
             }
 
-            // 后撤完成: 蓄力(此时离玩家至少 DashStartDist, 冲刺有完整的加速可视距离)
-            FlyToward(player.Center + Vector2.Normalize(NPC.Center - player.Center) * DashStartDist, tight: true);
+            // 后撤完成 → 蓄力(离玩家至少 DashStartDist, 冲刺有完整的加速可视距离)
+            Vector2 awayFromPlayer = NPC.Center - player.Center;
+            if (awayFromPlayer.LengthSquared() < 1f) awayFromPlayer = new Vector2(dashSide, 0f);
+            FlyToward(player.Center + Vector2.Normalize(awayFromPlayer) * DashStartDist, tight: true);
             FaceTowards(player.Center, TurnRate);
 
             if (NPC.ai[1] % 4f == 0f)
                 Dust.NewDustDirect(NPC.position, NPC.width, NPC.height, DustID.Silver);
 
-            if (NPC.ai[1] < mergeFrames + pullbackFrames + WindupFrames) return;
+            if (NPC.ai[1] < slideFrames + pullbackFrames + WindupFrames) return;
 
             // 冲出去: 方向按这一刻锁定, 之后不再修正
             Vector2 aim = player.Center - NPC.Center;
@@ -879,7 +964,7 @@ namespace TheCatMaodie.NPCs
         // 任何一帧直接改写 NPC.Center 都会表现为"被拽"。
         // tight=false: 巡航(大 slowRadius, 松的跟随), tight=true: 贴角(小 slowRadius, 收紧后几乎钉在点上,
         // 但玩家带着锚点移动时 boss 仍是平滑追过去, 不会跳)
-        private void FlyToward(Vector2 target, bool tight = false)
+        private void FlyToward(Vector2 target, bool tight = false, float speedMult = 1f)
         {
             Vector2 toTarget = target - NPC.Center;
             float dist = toTarget.Length();
@@ -887,7 +972,7 @@ namespace TheCatMaodie.NPCs
             Vector2 desired = Vector2.Zero;
             if (dist > 1f)
             {
-                desired = toTarget / dist * MoveSpeed;
+                desired = toTarget / dist * MoveSpeed * speedMult;
                 float slowRadius = tight ? 60f : 140f;
                 if (dist < slowRadius) desired *= dist / slowRadius;
             }
@@ -1056,33 +1141,9 @@ namespace TheCatMaodie.NPCs
             }
 
             // ── 状态5: X 型双发 ──
-            // 线的出现/消失直接跟分段状态走:
-            //   分段1(虚影已分出、本体蓄力中) → 两条线都在
-            //   分段2(本体已射、等虚影到位)   → 只剩虚影那条("本体已经打了, 虚影还没")
-            if (NPC.ai[0] != 5f || xPhase == 0) return;
-
-            // 阿尔忒弥斯的淡入: 前 8 帧从透明到全亮(GetLerpValue(0,8,timeLeft) 的等价)
-            float xFadein = MathHelper.Clamp(xCharge / 8f, 0f, 1f);
-            // 高频闪烁(约8Hz): 灾厄的线用着色器做流光, 这里用亮度方波近似"闪断"感
-            float xBlink = (Main.GlobalTimeWrappedHourly * 8f) % 1f < 0.5f ? 1f : 0.35f;
-            float alpha = xFadein * xBlink;
-
-            // 本体线: 蓄力期间显示, 它发射(转入分段2)就消失
-            if (xPhase == 1)
-            {
-                float progress = MathHelper.Clamp(xCharge / OrbWindup, 0f, 1f);
-                Color lineColor = new Color(255, 90, 70) * (0.55f + 0.45f * progress) * alpha;
-                Vector2 dirSelf = Vector2.Normalize(player.Center - MouthPosition());
-                DrawSimpleLine(spriteBatch, MouthPosition() - Main.screenPosition, dirSelf, AimLineLength, lineColor, 3f);
-            }
-
-            // 虚影线: 从它的角落指向玩家, 一直画到它自己发射那一刻
-            {
-                Vector2 gp = GhostPosition(player);
-                Vector2 dirGhost = Vector2.Normalize(player.Center - gp);
-                DrawSimpleLine(spriteBatch, gp - Main.screenPosition, dirGhost, AimLineLength,
-                    new Color(255, 90, 70) * 0.85f * alpha, 3f);
-            }
+            // 大弹幕不再画预警线(按需求去掉): 弹幕本体够大够明显, 让玩家读弹幕本身而不是读线。
+            // 所以这个状态直接不画任何线
+            return;
         }
 
         private static void DrawSimpleLine(SpriteBatch spriteBatch, Vector2 start, Vector2 dir, float length, Color color, float width)
@@ -1120,12 +1181,9 @@ namespace TheCatMaodie.NPCs
                 : SpriteEffects.None;
 
             // ── 虚影: 半透明的本体, 在对角的屏角上 ──
-            // 可见区间: X 型从"本体到位、虚影分出"(xPhase≥1)起, 到本拍结束; 合并滑行阶段也画。
-            // 分段0(本体自己飞向屏角)时还没有虚影 —— 它是本体站好之后才分出来的
-            bool ghostActive =
-                (NPC.ai[0] == 5f && xPhase >= 1) ||
-                (NPC.ai[0] == 1f && NPC.ai[1] <= 55f && ghostFlying);
-            if (ghostActive)
+            // 只在"本体到达角落、即将放大弹幕"那一刻生成(第一拍), 两发大弹幕打完就消失。
+            // 冲刺阶段没有虚影(不再合并), 所以这里只看 ghostAlive
+            if (ghostAlive)
             {
                 Vector2 gp = GhostPosition(player);
                 // 虚影面朝玩家: 按与玩家的水平关系定翻转(虚影不旋转, 始终水平朝向玩家)

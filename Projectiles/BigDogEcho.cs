@@ -38,7 +38,8 @@ namespace TheCatMaodie.Projectiles
         // 锁线段: 方向定死在锁定那一刻的玩家位置, 线不再跟人; 这段时间光束继续增粗增亮。
         // ★ 这才是真正的躲避窗口: 看到线定住不动了, 就横向跑出那条线
         public const float LockFrames = 30f;
-        public const float FireFrames = 25f;
+        // 发射段: 光束真正"开着"的时长。原来是 25 帧(0.42秒)太短, 按需求 +2 秒 → 145 帧
+        public const float FireFrames = 100f;
         // 第一只发射之后, 第二只等这么多帧才开始预瞄 → 两束激光拉开约 2 秒的间隔
         public const float StaggerFrames = 120f;
 
